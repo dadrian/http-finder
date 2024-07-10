@@ -29,16 +29,19 @@ type Fetch struct {
 	Next       string `json:"next,omitempty"`
 	Insecure   bool   `json:"insecure"`
 	Error      string `json:"error,omitempty"`
+	Upgraded   bool   `json:"upgraded"`
 }
 
 type OutputRecord = struct {
-	Hostname          string   `json:"hostname"`
-	HTTP              Result   `json:"http_result"`
-	HTTPSteps         []*Fetch `json:"http_steps"`
-	HTTPS             Result   `json:"https_result"`
-	HTTPSSteps        []*Fetch `json:"https_steps"`
-	HTTPWithUpgrades  Result   `json:"http_upgrades_result"`
-	HTTPSWithUpgrades Result   `json:"https_upgrades_result"`
+	Hostname               string   `json:"hostname"`
+	HTTP                   Result   `json:"http_result"`
+	HTTPSteps              []*Fetch `json:"http_steps"`
+	HTTPS                  Result   `json:"https_result"`
+	HTTPSSteps             []*Fetch `json:"https_steps"`
+	HTTPWithUpgrades       Result   `json:"http_upgrades"`
+	HTTPWithUpgradesSteps  []*Fetch `json:"http_upgrades_steps"`
+	HTTPForceUpgrades      Result   `json:"http_force_upgrades"`
+	HTTPForceUpgradesSteps []*Fetch `json:"http_force_upgrades_steps"`
 }
 
 func resultFromChain(chain []*Fetch) Result {
@@ -69,7 +72,35 @@ const (
 	ForceUpgrade    Upgrade = 2
 )
 
-func checkScheme(hostname string, scheme string, upgrade Upgrade) ([]*Fetch, Result, error) {
+func (up Upgrade) Upgraded(u url.URL) *url.URL {
+	u.Scheme = "https"
+	return &u
+}
+
+func shouldUpgrade(u *url.URL, up Upgrade) bool {
+	if u.Scheme == "https" {
+		return false
+	}
+	if u.Scheme == "http" {
+		switch up {
+		case NoUpgrade:
+			return false
+		case OptionalUpgrade, ForceUpgrade:
+			return true
+		}
+	}
+	return false
+}
+
+func canRetry(up Upgrade) bool {
+	switch up {
+	case OptionalUpgrade:
+		return true
+	}
+	return false
+}
+
+func navigateStartingAt(hostname string, scheme string, upgrade Upgrade) ([]*Fetch, Result, error) {
 	u := &url.URL{
 		Scheme: scheme,
 		Host:   hostname,
@@ -80,10 +111,22 @@ func checkScheme(hostname string, scheme string, upgrade Upgrade) ([]*Fetch, Res
 		if len(chain) >= 25 {
 			break
 		}
+		original := u
+		attemptUpgrade := false
+		didUpgrade := false
+		if attemptUpgrade = shouldUpgrade(u, upgrade); attemptUpgrade {
+			u = upgrade.Upgraded(*u)
+			didUpgrade = true
+		}
 		fetch, next, err := sendOne(u)
+		if err != nil && attemptUpgrade && canRetry(upgrade) {
+			didUpgrade = false
+			fetch, next, err = sendOne(original)
+		}
 		if err != nil {
 			return chain, ResultError, err
 		}
+		fetch.Upgraded = didUpgrade
 		chain = append(chain, fetch)
 		if fetch.Terminal || next == nil {
 			break
@@ -160,8 +203,10 @@ func main() {
 			Hostname: hostname,
 		}
 
-		output.HTTPSteps, output.HTTP, _ = checkScheme(hostname, "http", NoUpgrade)
-		output.HTTPSSteps, output.HTTPS, _ = checkScheme(hostname, "https", NoUpgrade)
+		output.HTTPSteps, output.HTTP, _ = navigateStartingAt(hostname, "http", NoUpgrade)
+		output.HTTPSSteps, output.HTTPS, _ = navigateStartingAt(hostname, "https", NoUpgrade)
+		output.HTTPWithUpgradesSteps, output.HTTPWithUpgrades, _ = navigateStartingAt(hostname, "http", OptionalUpgrade)
+		output.HTTPForceUpgradesSteps, output.HTTPForceUpgrades, _ = navigateStartingAt(hostname, "http", ForceUpgrade)
 
 		if err := w.Encode(&output); err != nil {
 			log.Fatalf("error writing output for row %d: %s", rowNumber, err)
