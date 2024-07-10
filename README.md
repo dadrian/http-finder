@@ -30,10 +30,11 @@ the initial connection and any subsequent redirects:
   will be HTTPS or an error.
 
 For each of these, the value will be an enum:
-- `SECURE`, meaning all steps in the chain were HTTPS,
-- `INSECURE_REDIRECT`, meaning the end of the chain was HTTPS, but there was at least one step that was HTTPi
-- `INSECURE`, meaning the chain ended on HTTP
-- `ERROR`, meaning the chain could not be completed
+- `SECURE`, meaning all steps in the chain were HTTPS.
+- `INSECURE_REDIRECT`, meaning the end of the chain was HTTPS, but there was at
+  least one step that was plaintext HTTP.
+- `INSECURE`, meaning the chain ended on HTTP.
+- `ERROR`, meaning the chain could not be completed.
 
 The chain for each methodology is stored in the corresponding `_steps` field, which is an array of requests.
 
